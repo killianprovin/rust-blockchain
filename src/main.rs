@@ -1,6 +1,7 @@
 use rust_blockchain::blockchain::{Blockchain, Block};
 use rust_blockchain::transaction::{Transaction, TxIn, TxOut};
 use serde_json;
+use hex;
 
 fn create_dummy_transaction() -> Transaction {
     let dummy_txid = [1u8; 32];
@@ -32,13 +33,16 @@ fn main() {
     let tx = create_dummy_transaction();
 
     let timestamp = 1000;
-    let genesis_block = Block::new(1, [0u8; 32], timestamp, 0, 0, vec![tx]);
+    let mut genesis_block = Block::new(1, [0u8; 32], timestamp, 8, 0, vec![tx]);
+
+    genesis_block.mine();
+    println!("Genesis block mined: {:?}", hex::encode(genesis_block.header_hash()));
 
     let blockchain = Blockchain::new(genesis_block);
 
     let serialized = serde_json::to_string_pretty(&blockchain)
         .expect("Erreur lors de la sérialisation de la blockchain");
-    println!("Blockchain sérialisée :\n{}", serialized);
+    //println!("Blockchain sérialisée :\n{}", serialized);
 
     let deserialized: Blockchain = serde_json::from_str(&serialized)
         .expect("Erreur lors de la désérialisation de la blockchain");

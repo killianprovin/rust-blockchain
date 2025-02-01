@@ -73,6 +73,34 @@ impl Block {
         let hash = blake3::hash(&data);
         *hash.as_bytes()
     }
+
+    pub fn mine(&mut self) {
+        while !Self::meets_difficulty(self.header_hash(), self.difficulty) {
+            self.nonce = self.nonce.wrapping_add(1);
+        }
+    }
+
+    fn meets_difficulty(hash: [u8; 32], difficulty: u32) -> bool {
+        let mut zero_bits = difficulty;
+        for byte in hash.iter() {
+            if zero_bits >= 8 {
+                if *byte != 0 {
+                    return false;
+                }
+                zero_bits -= 8;
+            } else if zero_bits > 0 {
+                let mask = 0xFF << (8 - zero_bits);
+                if *byte & mask != 0 {
+                    return false;
+                }
+                break;
+            } else {
+                break;
+            }
+        }
+        true
+    }
+
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,5 +196,20 @@ mod tests {
 
         assert_eq!(blockchain.latest_block().header_hash(), new_block.header_hash());
         assert_eq!(blockchain.blocks.len(), 2);
+    }
+
+    #[test]
+    fn test_mine_block() {
+        let tx = create_dummy_transaction();
+        let timestamp = 1000;
+        let mut block = Block::new(1, [0u8; 32], timestamp, 5, 0, vec![tx]);
+
+        let pre_mine_hash = block.header_hash();
+        assert!(!Block::meets_difficulty(pre_mine_hash, block.difficulty), "Le bloc ne doit pas être encore miné");
+
+        block.mine();
+
+        let mined_hash = block.header_hash();
+        assert!(Block::meets_difficulty(mined_hash, block.difficulty), "Le bloc doit être miné et respecter la difficulté");
     }
 }
