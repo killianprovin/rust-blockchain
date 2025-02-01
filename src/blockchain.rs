@@ -127,7 +127,7 @@ impl Blockchain {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transaction::{Transaction, TxIn, TxOut};
+    use crate::transaction::{Transaction, TxIn, TxOut, TxInData};
 
     fn create_dummy_transaction() -> Transaction {
         let dummy_txid = [1u8; 32];
@@ -139,6 +139,7 @@ mod tests {
             previous_vout: dummy_vout,
             pubkey: dummy_pubkey,
             signature: dummy_signature.into(),
+            tx_in_data: Some(TxInData::Standard),
         };
 
         let dummy_recipient_hash = [2u8; 32];

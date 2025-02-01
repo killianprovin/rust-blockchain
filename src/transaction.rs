@@ -42,11 +42,23 @@ pub enum SigHashType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoinbaseData {
+    pub block_height: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TxInData {
+    Standard,
+    Coinbase(CoinbaseData),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TxIn {
     pub previous_txid: [u8; 32],
     pub previous_vout: u32,
     pub pubkey: [u8; 32],
     pub signature: SchnorrSignature,
+    pub tx_in_data: Option<TxInData>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,14 +87,32 @@ impl Transaction {
                     data.extend_from_slice(&input.previous_txid);
                     data.extend_from_slice(&input.previous_vout.to_le_bytes());
                     data.extend_from_slice(&input.pubkey);
+                    match &input.tx_in_data {
+                        Some(TxInData::Standard) => {},
+                        Some(TxInData::Coinbase(coinbasedata)) => {
+                            data.extend_from_slice(&coinbasedata.block_height.to_le_bytes());
+                        },
+                        None => panic!("Données d'entrée manquantes"),
+                    }
                 }
             },
             SigHashType::AllAnyoneCanPay | SigHashType::NoneAnyoneCanPay | SigHashType::SingleAnyoneCanPay => {
                 if let Some(idx) = input_index {
-                    let input = &self.inputs[idx];
-                    data.extend_from_slice(&input.previous_txid);
-                    data.extend_from_slice(&input.previous_vout.to_le_bytes());
-                    data.extend_from_slice(&input.pubkey);
+                    if idx < self.inputs.len() {
+                        let input = &self.inputs[idx];
+                        data.extend_from_slice(&input.previous_txid);
+                        data.extend_from_slice(&input.previous_vout.to_le_bytes());
+                        data.extend_from_slice(&input.pubkey);
+                        match &input.tx_in_data {
+                            Some(TxInData::Standard) => {},
+                            Some(TxInData::Coinbase(coinbasedata)) => {
+                                data.extend_from_slice(&coinbasedata.block_height.to_le_bytes());
+                            },
+                            None => panic!("Données d'entrée manquantes"),
+                        }
+                    } else {
+                        panic!("Indice d'entrée invalide pour le mode ANYONECANPAY");
+                    }
                 } else {
                     panic!("Indice d'entrée requis pour le mode ANYONECANPAY");
                 }
@@ -160,6 +190,29 @@ impl Transaction {
     }
 }
 
+pub fn create_coinbase_transaction(reward: u64, miner_address: [u8; 32], block_height: u32) -> Transaction {
+    let coinbase_input = TxIn {
+        previous_txid: [0u8; 32],
+        previous_vout: u32::MAX,
+        pubkey: [0u8; 32],
+        signature: SchnorrSignature { r: [0u8; 32], s: [0u8; 32] },
+        tx_in_data: Some(TxInData::Coinbase(CoinbaseData { block_height })),
+    };
+
+    // Le ou les outputs indiquent le paiement de la récompense.
+    let coinbase_output = TxOut {
+        value: reward,
+        recipient_hash: miner_address, // L'adresse (recipient_hash) du mineur
+    };
+
+    Transaction {
+        version: 1,
+        inputs: vec![coinbase_input],
+        outputs: vec![coinbase_output],
+        lock_time: 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,6 +229,7 @@ mod tests {
             previous_vout: dummy_vout,
             pubkey: dummy_pubkey,
             signature: dummy_signature.into(),
+            tx_in_data: Some(TxInData::Standard),
         };
 
         let dummy_recipient_hash = [2u8; 32];
@@ -210,6 +264,7 @@ mod tests {
             previous_vout: dummy_vout,
             pubkey: pubkey_bytes,
             signature: [0u8; 64].into(),
+            tx_in_data: Some(TxInData::Standard),
         };
 
         let dummy_recipient_hash = [2u8; 32];
@@ -251,6 +306,7 @@ mod tests {
             previous_vout: dummy_vout,
             pubkey: dummy_pubkey,
             signature: dummy_signature.into(),
+            tx_in_data: Some(TxInData::Standard),
         };
 
         let dummy_recipient_hash = [2u8; 32];
@@ -267,5 +323,18 @@ mod tests {
         };
 
         let _ = tx.sighash_preimage(SigHashType::Single, None);
+    }
+
+    #[test]
+    fn test_coinbase_transaction() {
+        let miner_address = [42u8; 32];
+        let reward = 50;
+        let tx = create_coinbase_transaction(reward, miner_address, 42);
+        assert_eq!(tx.inputs.len(), 1);
+        assert_eq!(tx.outputs.len(), 1);
+        assert_eq!(tx.inputs[0].previous_txid, [0u8; 32]);
+        assert_eq!(tx.inputs[0].previous_vout, u32::MAX);
+        assert_eq!(tx.outputs[0].value, reward);
+        assert_eq!(tx.outputs[0].recipient_hash, miner_address);
     }
 }

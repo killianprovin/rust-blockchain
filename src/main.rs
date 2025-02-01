@@ -1,53 +1,85 @@
-use rust_blockchain::blockchain::{Blockchain, Block};
-use rust_blockchain::transaction::{Transaction, TxIn, TxOut};
-use serde_json;
-use hex;
+use sled;
+use bincode;
 
-fn create_dummy_transaction() -> Transaction {
-    let dummy_txid = [1u8; 32];
-    let dummy_vout = 0;
-    let dummy_pubkey = [10u8; 32];
-    let dummy_signature = [0u8; 64];
-    let txin = TxIn {
-        previous_txid: dummy_txid,
-        previous_vout: dummy_vout,
-        pubkey: dummy_pubkey,
-        signature: dummy_signature.into(),
-    };
+use rust_blockchain::transaction::{Transaction, create_coinbase_transaction};
+use rust_blockchain::blockchain::Block;
 
-    let dummy_recipient_hash = [2u8; 32];
-    let txout = TxOut {
-        value: 50,
-        recipient_hash: dummy_recipient_hash,
-    };
-
-    Transaction {
-        version: 1,
-        inputs: vec![txin],
-        outputs: vec![txout],
-        lock_time: 0,
-    }
+fn store_transaction(db: &sled::Db, key: [u8; 32], tx: &Transaction) -> Result<(), Box<dyn std::error::Error>> {
+    // Sérialise la transaction en format binaire
+    let encoded: Vec<u8> = bincode::serialize(tx)?;
+    // Stocke la valeur dans la base de données avec la clé fournie
+    db.insert(key, encoded)?;
+    db.flush()?; // pour s'assurer que les données sont écrites sur disque
+    Ok(())
 }
 
-fn main() {
-    let tx = create_dummy_transaction();
+fn load_transaction(db: &sled::Db, key: [u8; 32]) -> Result<Transaction, Box<dyn std::error::Error>> {
+    // Récupère les données associées à la clé
+    let data = db.get(key)?.ok_or("Clé non trouvée")?;
+    // Désérialise les données en une Transaction
+    let tx: Transaction = bincode::deserialize(&data)?;
+    Ok(tx)
+}
 
-    let timestamp = 1000;
-    let mut genesis_block = Block::new(1, [0u8; 32], timestamp, 8, 0, vec![tx]);
+fn store_block(db: &sled::Db, block: &Block) -> Result<(), Box<dyn std::error::Error>> {
+    let key = block.header_hash();
+    let serialized_block = bincode::serialize(block)?;
+    db.insert(key, serialized_block)?;
+    // Met à jour le dernier bloc (HEAD)
+    db.insert("HEAD", key.as_ref())?;
+    db.flush()?;
+    Ok(())
+}
 
+fn get_latest_block(db: &sled::Db) -> Result<Option<Block>, Box<dyn std::error::Error>> {
+    if let Some(head_bytes) = db.get("HEAD")? {
+        let head_hash: [u8; 32] = head_bytes.as_ref().try_into().expect("Taille invalide");
+        if let Some(serialized_block) = db.get(head_hash)? {
+            let block: Block = bincode::deserialize(&serialized_block)?;
+            return Ok(Some(block));
+        }
+    }
+    Ok(None)
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let dbutxo = sled::open("db_UTXO")?;
+
+    let tx1 = create_coinbase_transaction(100, [42u8; 32], 10);
+    let tx2 = create_coinbase_transaction(100, [42u8; 32], 11);
+
+    store_transaction(&dbutxo, tx1.tx_hash(), &tx1)?;
+    store_transaction(&dbutxo, tx2.tx_hash(), &tx2)?;
+
+    println!("Liste UTXO:");
+    for item in dbutxo.iter() {
+        let (key, _value) = item?;
+        println!("ID: {}", hex::encode(&key));
+        dbutxo.remove(key)?;
+    }
+
+    let dbblockchain = sled::open("db_Blockchain")?;
+
+    let mut genesis_block = Block::new(1, [0u8; 32], 1000, 16, 0, vec![tx1.clone(), tx2.clone()]);
     genesis_block.mine();
-    println!("Genesis block mined: {:?}", hex::encode(genesis_block.header_hash()));
+    let mut block1 = Block::new(2, genesis_block.header_hash(), 1001, 16, 0, vec![tx1.clone(), tx2.clone()]);
+    block1.mine();
 
-    let blockchain = Blockchain::new(genesis_block);
+    store_block(&dbblockchain, &genesis_block)?;
+    store_block(&dbblockchain, &block1)?;
 
-    let serialized = serde_json::to_string_pretty(&blockchain)
-        .expect("Erreur lors de la sérialisation de la blockchain");
-    //println!("Blockchain sérialisée :\n{}", serialized);
+    let latest_block = get_latest_block(&dbblockchain)?;
+    if let Some(block) = latest_block {
+        println!("Dernier bloc: {}", hex::encode(block.header_hash()));
+    }
 
-    let deserialized: Blockchain = serde_json::from_str(&serialized)
-        .expect("Erreur lors de la désérialisation de la blockchain");
+    println!("Liste Block:");
+    for item in dbblockchain.iter() {
+        let (key, _value) = item?;
+        println!("ID: {}", hex::encode(&key));
+        dbblockchain.remove(key)?;
+    }
 
-    let original_hash = blockchain.latest_block().header_hash();
-    let deserialized_hash = deserialized.latest_block().header_hash();
-    assert_eq!(original_hash, deserialized_hash, "Les blockchains doivent être identiques après désérialisation");
+
+    Ok(())
 }
