@@ -37,3 +37,23 @@ pub fn get_latest_block(db: &sled::Db) -> Result<Option<Block>, Box<dyn Error>> 
     }
     Ok(None)
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transaction::create_coinbase_transaction;
+
+    #[test]
+    fn test_store_and_load_transaction() -> Result<(), Box<dyn std::error::Error>> {
+        let dbutxo = sled::open("db_UTXO")?;
+        let tx1 = create_coinbase_transaction(100, [42u8; 32], 10);
+        store_transaction(&dbutxo, tx1.tx_hash(), &tx1).unwrap();
+        let loaded_tx = load_transaction(&dbutxo, tx1.tx_hash()).unwrap();
+        assert_eq!(loaded_tx.tx_hash(), tx1.tx_hash());
+
+        dbutxo.remove(tx1.tx_hash())?;
+
+        Ok(())
+    }
+}

@@ -1,48 +1,90 @@
-use sled;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
+use std::time::Duration;
 
-use rust_blockchain::transaction::{create_coinbase_transaction};
-use rust_blockchain::blockchain::Block;
-use rust_blockchain::db::{store_transaction, store_block, get_latest_block};
+// Définition d'une transaction factice
+#[derive(Debug, Clone)]
+struct Transaction {
+    id: u32,
+}
 
+fn main() {
+    // La mempool est partagée entre plusieurs threads, on l'enveloppe dans Arc et Mutex.
+    let mempool = Arc::new(Mutex::new(Vec::<Transaction>::new()));
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let dbutxo = sled::open("db_UTXO")?;
+    // Création d'un canal pour recevoir les transactions (de l'API ou des peers).
+    let (tx, rx) = mpsc::channel::<Transaction>();
 
-    let tx1 = create_coinbase_transaction(100, [42u8; 32], 10);
-    let tx2 = create_coinbase_transaction(100, [42u8; 32], 11);
+    // --- Thread API --- //
+    // Ce thread simule la réception de transactions depuis une API web.
+    let tx_api = tx.clone();
+    let api_thread = thread::spawn(move || {
+        for i in 0..5 {
+            let transaction = Transaction { id: i };
+            println!("[API] Nouvelle transaction reçue: {:?}", transaction);
+            tx_api.send(transaction).expect("Erreur lors de l'envoi de la transaction depuis l'API");
+            thread::sleep(Duration::from_millis(500));
+        }
+    });
 
-    store_transaction(&dbutxo, tx1.tx_hash(), &tx1)?;
-    store_transaction(&dbutxo, tx2.tx_hash(), &tx2)?;
+    // --- Thread Peer --- //
+    // Ce thread simule la réception de transactions depuis des pairs.
+    let tx_peer = tx.clone();
+    let peer_thread = thread::spawn(move || {
+        for i in 100..105 {
+            let transaction = Transaction { id: i };
+            println!("[Peer] Nouvelle transaction reçue: {:?}", transaction);
+            tx_peer.send(transaction).expect("Erreur lors de l'envoi de la transaction depuis un peer");
+            thread::sleep(Duration::from_millis(700));
+        }
+    });
 
-    println!("Liste UTXO:");
-    for item in dbutxo.iter() {
-        let (key, _value) = item?;
-        println!("ID: {}", hex::encode(&key));
-        dbutxo.remove(key)?;
-    }
+    // --- Thread Updater --- //
+    // Ce thread reçoit les transactions depuis le canal et met à jour la mempool partagée.
+    let mempool_updater = Arc::clone(&mempool);
+    let updater_thread = thread::spawn(move || {
+        // La boucle s'exécute tant que le canal est ouvert.
+        for transaction in rx {
+            {
+                let mut pool = mempool_updater.lock().unwrap();
+                pool.push(transaction.clone());
+                println!("[Updater] Mempool mise à jour: {:?}", *pool);
+            }
+        }
+        println!("[Updater] Fin du canal, arrêt de la mise à jour de la mempool");
+    });
 
-    let dbblockchain = sled::open("db_Blockchain")?;
+    // --- Thread Mining --- //
+    // Ce thread simule le minage en lisant régulièrement la mempool.
+    let mempool_mining = Arc::clone(&mempool);
+    let mining_thread = thread::spawn(move || {
+        // Ce thread s'exécute indéfiniment dans cet exemple.
+        // Dans une application réelle, il faudrait prévoir un mécanisme d'arrêt.
+        for _ in 0..10 {
+            {
+                let pool = mempool_mining.lock().unwrap();
+                if !pool.is_empty() {
+                    println!("[Mining] Mempool contient {} transaction(s)", pool.len());
+                    // Ici, on pourrait sélectionner des transactions et tenter de miner un bloc.
+                } else {
+                    println!("[Mining] Mempool vide, en attente de transactions...");
+                }
+            }
+            thread::sleep(Duration::from_secs(1));
+        }
+        println!("[Mining] Fin du thread de minage (simulation terminée)");
+    });
 
-    let mut genesis_block = Block::new(1, [0u8; 32], 1000, 16, 0, vec![tx1.clone(), tx2.clone()]);
-    genesis_block.mine();
-    let mut block1 = Block::new(2, genesis_block.header_hash(), 1002, 16, 0, vec![tx1.clone(), tx2.clone()]);
-    block1.mine();
+    // Attente de la fin des threads API et Peer.
+    api_thread.join().unwrap();
+    peer_thread.join().unwrap();
 
-    store_block(&dbblockchain, &genesis_block)?;
-    store_block(&dbblockchain, &block1)?;
+    // Pour clore proprement le canal et terminer le thread updater, on droppe le dernier émetteur.
+    drop(tx);
+    updater_thread.join().unwrap();
 
-    let latest_block = get_latest_block(&dbblockchain)?;
-    if let Some(block) = latest_block {
-        println!("Dernier bloc: {}", hex::encode(block.header_hash()));
-    }
+    // Attendre la fin du thread de minage.
+    mining_thread.join().unwrap();
 
-    println!("Liste Block:");
-    for item in dbblockchain.iter() {
-        let (key, _value) = item?;
-        println!("ID: {}", hex::encode(&key));
-        dbblockchain.remove(key)?;
-    }
-
-
-    Ok(())
+    println!("Arrêt de l'application.");
 }
