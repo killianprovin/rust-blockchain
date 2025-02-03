@@ -176,7 +176,7 @@ impl Transaction {
         &self,
         secp: &Secp256k1<secp256k1::All>,
         input_index: usize,
-        signature: [u8; 64],
+        signature: SchnorrSignature,
         pubkey_bytes: [u8; 32],
         sighash: SigHashType,
     ) -> bool {
@@ -185,8 +185,40 @@ impl Transaction {
         let message = Message::from_digest(*hash.as_bytes());
         let xonly_pubkey = XOnlyPublicKey::from_slice(&pubkey_bytes)
             .expect("Clé publique invalide");
-        let sig = Signature::from_byte_array(signature);
+        let sig = Signature::from_byte_array(signature.into());
         secp.verify_schnorr(&sig, message.as_ref(), &xonly_pubkey).is_ok()
+    }
+
+    pub fn is_valid_coinbase(&self, block_height: u32, reward: u64) -> bool {
+        if self.inputs.len() != 1 {
+            return false;
+        }
+        if self.outputs.len() != 1 {
+            return false;
+        }
+        if self.outputs[0].value != reward {
+            return false;
+        }
+        if self.inputs[0].previous_txid != [0u8; 32] {
+            return false;
+        }
+        if self.inputs[0].previous_vout != u32::MAX {
+            return false;
+        }
+        if self.inputs[0].pubkey != [0u8; 32] {
+            return false;
+        }
+        if self.inputs[0].signature.r != [0u8; 32] || self.inputs[0].signature.s != [0u8; 32] {
+            return false;
+        }
+        if let Some(TxInData::Coinbase(coinbase_data)) = &self.inputs[0].tx_in_data {
+            if coinbase_data.block_height != block_height {
+                return false;
+            }
+        } else {
+            return false;
+        }
+        true
     }
 }
 
@@ -199,10 +231,9 @@ pub fn create_coinbase_transaction(reward: u64, miner_address: [u8; 32], block_h
         tx_in_data: Some(TxInData::Coinbase(CoinbaseData { block_height })),
     };
 
-    // Le ou les outputs indiquent le paiement de la récompense.
     let coinbase_output = TxOut {
         value: reward,
-        recipient_hash: miner_address, // L'adresse (recipient_hash) du mineur
+        recipient_hash: miner_address,
     };
 
     Transaction {
@@ -330,11 +361,7 @@ mod tests {
         let miner_address = [42u8; 32];
         let reward = 50;
         let tx = create_coinbase_transaction(reward, miner_address, 42);
-        assert_eq!(tx.inputs.len(), 1);
-        assert_eq!(tx.outputs.len(), 1);
-        assert_eq!(tx.inputs[0].previous_txid, [0u8; 32]);
-        assert_eq!(tx.inputs[0].previous_vout, u32::MAX);
-        assert_eq!(tx.outputs[0].value, reward);
-        assert_eq!(tx.outputs[0].recipient_hash, miner_address);
+        
+        assert!(tx.is_valid_coinbase(42, reward), "La transaction coinbase doit être valide");
     }
 }

@@ -1,4 +1,3 @@
 /target
-db_UTXO/*
-db_blockchain/*
+db_*/*
 Cargo.lock
