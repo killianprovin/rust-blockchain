@@ -1,4 +1,4 @@
 pub mod transaction;
+pub mod script;
+pub mod utils;
 pub mod wallet;
-pub mod blockchain;
-pub mod db;
