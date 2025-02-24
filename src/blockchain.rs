@@ -1,11 +1,10 @@
 use serde::{Serialize, Deserialize};
 use secp256k1::Secp256k1;
 use blake3;
-
-use crate::transaction::{Transaction, SigHashType};
+use crate::transaction::{Transaction};
 use crate::db::make_key;
 
-
+// Types UTXO et HeadUTXO
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HeadUTXO {
     pub txid: [u8; 32],
@@ -14,8 +13,7 @@ pub struct HeadUTXO {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UTXO {
-    pub txid: [u8; 32],
-    pub vout: u32,
+    pub head: HeadUTXO,
     pub value: u64,
     pub recipient_hash: [u8; 32],
 }
@@ -23,7 +21,7 @@ pub struct UTXO {
 pub fn find_utxo(new_utxos: &[UTXO], txid: [u8; 32], vout: u32) -> Option<UTXO> {
     new_utxos
         .iter()
-        .find(|utxo| utxo.txid == txid && utxo.vout == vout)
+        .find(|utxo| utxo.head.txid == txid && utxo.head.vout == vout)
         .cloned()
 }
 
@@ -128,7 +126,7 @@ impl Block {
         true
     }
 
-    pub fn is_header_valid(&self, difficulty: u32, reward: u64, last_hash: [u8; 32], block_height: u32) -> bool {
+    pub fn is_header_valid(&self, difficulty: u32, last_hash: [u8; 32], block_height: u32) -> bool {
         // Vérifie que le bloc suit le bloc précédent
         if self.previous_block_hash != last_hash {
             println!("Bloc précédent invalide");
@@ -160,60 +158,44 @@ impl Block {
 #[derive(Debug, Clone)]
 pub struct Blockchain {
     pub secp: Secp256k1<secp256k1::All>,
-    pub head: [u8; 32],
     pub mempool: Vec<Transaction>,
     pub db_utxo: sled::Db,
     pub db_block: sled::Db,
-    pub test: bool,
 }
 
 impl Blockchain {
-    pub fn new(secp: Secp256k1<secp256k1::All>, db_utxo_name: &str, db_block_name: &str, genesis_block: Block, test: bool) -> Result<Blockchain, Box<dyn std::error::Error>> {
-        if test {
-            let db_utxo = sled::Config::new()
-                .temporary(true)
-                .open()
-                .expect("Impossible d'ouvrir la base de données UTXO");
-            let db_block = sled::Config::new()
-                .temporary(true)
-                .open()
-                .expect("Impossible d'ouvrir la base de données des blocs");
-            let genesis_hash = genesis_block.header_hash();
-            db_block.insert(genesis_hash, bincode::serialize(&genesis_block)?)?;
-            return Ok(Blockchain {
-                secp,
-                head: genesis_block.header_hash(),
-                mempool: vec![],
-                db_utxo,
-                db_block,
-                test,
-            });
-        }
+    pub fn new(secp: Secp256k1<secp256k1::All>, db_utxo_name: &str, db_block_name: &str, genesis_block: Block) -> Result<Blockchain, Box<dyn std::error::Error>> {
         let db_utxo = sled::open(db_utxo_name)?;
         let db_block = sled::open(db_block_name)?;
         let head = genesis_block.header_hash();
         db_block.insert(head, bincode::serialize(&genesis_block)?)?;
+        db_block.insert("head", &head)?;
         Ok(Blockchain {
             secp,
-            head,
             mempool: vec![],
             db_utxo,
             db_block,
-            test,
         })
     }
 
+    pub fn sethead(&mut self, head: [u8; 32]) {
+        self.db_block.insert("head", &head).unwrap();
+    }
+
+    pub fn head(&self) -> [u8; 32] {
+        self.db_block.get("head").unwrap().unwrap().to_vec().try_into().unwrap()
+    }
+
     pub fn height(&self) -> u32 {
-        let head_block = self.db_block.get(&self.head).unwrap().unwrap();
+        let head_block = self.db_block.get(&self.head()).unwrap().unwrap();
         let block: Block = bincode::deserialize(&head_block).unwrap();
         block.height
     }
 
     pub fn add(&mut self, block: Block) -> Result<(), Box<dyn std::error::Error>> {
         let block_hash = block.header_hash();
-        let head_block = self.db_block.get(&self.head).unwrap().unwrap();
         self.db_block.insert(block_hash, bincode::serialize(&block)?)?;
-        self.head = block_hash;
+        self.sethead(block_hash);
         Ok(())
     }
 
@@ -225,17 +207,15 @@ impl Blockchain {
     ) -> Result<bool, Box<dyn std::error::Error>> {
         let mut total_input: u64 = 0;
         let mut tempo_use_utxos = use_utxos.clone();
-        for (i, txin) in tx.inputs.iter().enumerate() {
+        println!("Nbr use UTXO: {}", use_utxos.len());
+        for txin in tx.inputs.iter() {
             let key = make_key(txin.previous_txid, txin.previous_vout);
             // On tente d'abord de trouver l'UTXO dans la base de données.
             let utxo: UTXO = if let Some(db_value) = self.db_utxo.get(&key)? {
                 // Si trouvé, on désérialise le UTXO.
                 bincode::deserialize(&db_value)?
+            // Sinon on cherche dans les new_utxos
             } else if let Some(new_utxo) = find_utxo(new_utxos, txin.previous_txid, txin.previous_vout) {
-                if tempo_use_utxos.contains(&HeadUTXO { txid: txin.previous_txid, vout: txin.previous_vout }) {
-                    println!("Double dépense détectée");
-                    return Ok(false);
-                }
                 new_utxo
             } else {
                 // Si l'UTXO n'est trouvé ni dans la DB ni dans new_utxos, la transaction n'est pas valide.
@@ -243,12 +223,18 @@ impl Blockchain {
                 return Ok(false);
             };
     
+            // On vérifie que l'UTXO n'a pas déjà été utilisé dans le block actuel
+            if tempo_use_utxos.contains(&utxo.head) {
+                println!("Double dépense détectée");
+                return Ok(false);
+            }
+
             // On ajoute l'UTXO dans la liste des UTXO utilisés pour empêcher une double dépense dans le même bloc.
-            tempo_use_utxos.push(HeadUTXO { txid: txin.previous_txid, vout: txin.previous_vout });
+            tempo_use_utxos.push(utxo.head);
 
 
             // On vérifie que la signature est valide.
-            let valid = tx.verify_input(&self.secp, i, txin.signature.clone(), txin.pubkey, SigHashType::All);
+            let valid = tx.verify_input(&self.secp, txin.signature.clone(), txin.pubkey);
             if !valid {
                 println!("Signature invalide");
                 return Ok(false);
@@ -267,9 +253,9 @@ impl Blockchain {
     }
     
     pub fn process_block(&mut self, difficulty: u32, reward: u64, block: Block) -> Result<bool, Box<dyn std::error::Error>> {
-        let head_block = self.db_block.get(&self.head).unwrap().unwrap();
+        let head_block = self.db_block.get(&self.head()).unwrap().unwrap();
         let head: Block = bincode::deserialize(&head_block)?;
-        if !block.is_header_valid(difficulty, reward, head.header_hash(), head.height + 1) {
+        if !block.is_header_valid(difficulty, head.header_hash(), head.height + 1) {
             println!("Bloc header invalide");
             return Ok(false);
         }
@@ -285,28 +271,30 @@ impl Blockchain {
         }
 
         new_utxos.push(UTXO {
-            txid: coinbase_tx.tx_hash(),
-            vout: 0,
+            head: HeadUTXO {
+                txid: coinbase_tx.tx_hash(),
+                vout: 0,
+            },
             value: coinbase_tx.outputs[0].value,
             recipient_hash: coinbase_tx.outputs[0].recipient_hash,
         });
         
         for tx in block.transactions.iter().skip(1) {
             if !self.valid_transaction(tx, &new_utxos, &use_utxos)? {
-                println!("Transaction invalide");
                 return Ok(false);
             }
             for (i, txout) in tx.outputs.iter().enumerate() {
-                let key = make_key(tx.tx_hash(), i as u32);
                 let utxo = UTXO {
-                    txid: tx.tx_hash(),
-                    vout: i as u32,
+                    head: HeadUTXO {
+                        txid: tx.tx_hash(),
+                        vout: i as u32,
+                    },
                     value: txout.value,
                     recipient_hash: txout.recipient_hash,
                 };
                 new_utxos.push(utxo.clone());
             }
-            for (i, txin) in tx.inputs.iter().enumerate() {
+            for txin in tx.inputs.iter() {
                 use_utxos.push(HeadUTXO {
                     txid: txin.previous_txid,
                     vout: txin.previous_vout
@@ -316,7 +304,7 @@ impl Blockchain {
         self.add(block)?;
 
         for utxo in new_utxos {
-            let key = make_key(utxo.txid, utxo.vout);
+            let key = make_key(utxo.head.txid, utxo.head.vout);
             self.db_utxo.insert(key, bincode::serialize(&utxo)?)?;
         }
         for utxo in use_utxos {
