@@ -28,23 +28,3 @@ pub fn create_witness_p2wsh(signatures: Vec<&[u8]>, redeem_script: &[u8]) -> Wit
     items.push(redeem_script.to_vec());
     Witness { items }
 }
-
-/// Pour Taproot en mode Key Path Spend, le witness contient une seule signature Schnorr
-pub fn create_witness_p2tr_keypath(signature: &[u8]) -> Witness {
-    Witness {
-        items: vec![signature.to_vec()],
-    }
-}
-
-/// Pour Taproot en mode Script Path Spend (MAST)
-pub fn create_witness_p2tr_scriptpath(arguments: Vec<&[u8]>, script: &[u8], control_block: &[u8]) -> Witness {
-    let mut items: Vec<Vec<u8>> = Vec::new();
-    for arg in arguments {
-        items.push(arg.to_vec());
-    }
-    
-    items.push(script.to_vec());
-    
-    items.push(control_block.to_vec());
-    Witness { items }
-}

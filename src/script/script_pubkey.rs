@@ -6,7 +6,6 @@ use sha2::{Sha256, Digest};
 pub enum ScriptPubKey {
     P2WPKH(Vec<u8>),         // Pay to Witness Public Key Hash
     P2WSH(Vec<u8>),          // Pay to Witness Script Hash
-    P2TR(Vec<u8>),           // Pay to Taproot (Key Path ou Script Path)
 }
 
 impl ScriptPubKey {
@@ -46,10 +45,5 @@ impl ScriptPubKey {
         // Calcul du Hash : SHA256(redeem_script)
         let hash = Sha256::digest(redeem_script);
         ScriptPubKey::P2WSH(hash.to_vec())
-    }
-
-    /// Génère un scriptPubKey P2TR (Taproot) à partir de la clé de sortie (output key)
-    pub fn create_p2tr(output_key: &[u8]) -> ScriptPubKey {
-        ScriptPubKey::P2TR(output_key.to_vec())
     }
 }
