@@ -22,28 +22,28 @@ y'a double_sha256 que j'utilise pour les transaction et hash160 pour les adress 
 # Script 
 ## Script PubKey
 poru l'instant on gere 3 type :
-P2WPKH (transaction classique)
-P2WSH (pour le multisig)
+ + P2WPKH (transaction classique)
+ + P2WSH (pour le multisig)
 # Witness
 on gère les meme type que Script PubKey
-P2WPKH : signature + pubkey
-P2WSH : signatures + script
+ + P2WPKH : signature + pubkey
+ + P2WSH : signatures + script
 
 
 # Transaction
 ## Tx
 ### OutPoint
-txid : l'id de la transaction précédente 
-vout : et l'index du out corespondant
+- txid : l'id de la transaction précédente 
+- vout : et l'index du out corespondant
 ### TxIn
-previous_output : OutPoint
-sequence : pour transaction retardées (absolu ou relatif)
-witness : CF avant la preuve qui corespond au script pour dépenser
+ - previous_output : OutPoint
+ - sequence : pour transaction retardées (absolu ou relatif)
+ - witness : CF avant la preuve qui corespond au script pour dépenser
 ### TxOut
-value : la valeur envoyé
-script_pubkey : CF avant, le script pour dépenser
+ - value : la valeur envoyé
+ - script_pubkey : CF avant, le script pour dépenser
 ### Tx
 version
-inputs : CF avant
-outputs : CF avant
-lock_time  : date de validité de la signature (à voir avec sequence)
+ - inputs : CF avant
+ - outputs : CF avant
+ - lock_time  : date de validité de la signature (à voir avec sequence)
